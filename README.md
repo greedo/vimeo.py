@@ -1,208 +1,144 @@
-**python-vimeo** is a library that wraps the
-[Vimeo API v3.0](https://developer.vimeo.com/api/docs), providing
-an idiomatic interface familiar to python programmers. It also
-provides scripts and convenience functions that help navigate authentication,
-automate uploads, and more.
+# PyVimeo
 
-Usage
------
+This is a simple library for interacting with the [Vimeo API](https://developers.vimeo.com).
 
-If you really want to become familiar with this library, read
-the docstrings in the code. There is a lot of documentation with some code examples
-interspersed. A good starting point would be `vimeoresource.py`.
+### Example Usage
 
-Initialization
---------------
+```python
+import vimeo
 
-To start using the library, first import the `VimeoClient`
+v = vimeo.VimeoClient(
+    token=YOUR_AUTHENTICATED_BEARER_TOKEN,
+    key=YOUR_API_TOKEN,
+    secret=YOUR_TOKEN_SECRET)
 
-    from vimeo import VimeoClient
+# Make the request to the server for the "/me" endpoint.
+about_me = v.get('/me')
 
-Then, initialize a new client with your OAuth2 access token.
+assert about_me.status_code == 200  # Make sure we got back a successful response.
+print about_me.json()   # Load the body's JSON data.
 
-    vimeo = VimeoClient("#my#access#token#")
+```
 
-This token can be found [here](https://developer.vimeo.com/apps), or you can
-use the script included with this library to create a new one.
+Note:  You can find the app tokens and an authenticated bearer token in the "OAuth 2" tab for your app on the [Vimeo developer site](https://developer.vimeo.com/apps).
 
-Creating an Access Token
-------------------------
+### Installation 
 
-It is not strictly necessary to generate an access token before using this
-library.
+This package is called ``PyVimeo`` on PyPI. Install using::
 
-When using this library in the context of a web server such as Tornado, the
-programmer should use the functions found in vimeo/auth.py to guide a user
-through the authorization flow, allowing the user to create their own access
-token. For details on guiding users through the authorization flow in the
-context of a server, see the docstrings in `vimeo/auth.py`.
+    $ pip install PyVimeo
 
-If you are using the library and need a new access token for yourself (for example,
-for testing), there is a script provided (in `scripts/`) for offline use.
+### Authenticating
 
-The authorization process involves asking Vimeo for an authentication token and
-then using that authentication token to request the access token.
+There are two main types of authentication in the Vimeo API:
 
-To do this offline, use the script at `scripts/authorize.py`. It requires a few
-different arguments, including a list of [scopes](https://developer.vimeo.com/api/authentication#scopes)
-requested for the newly created token.
+0. Client Credentials: A token that is specific to your app and NOT a user.
+0. Authorization Code: A token that is for your app, but has the ability to act on behalf of the authorizing user.
 
-    python authorize.py -i #my#client#id# -s #my#client#secret# -r http://mya.pp/callback/url -o public private
+Note:  Both types of authentication require you go to the [Vimeo developer site](https://developer.vimeo.com/apps) and register an application with Vimeo.
 
-This script will ask you to visit a certain URL in a browser. When you have
-visited the URL and clicked "Allow", you will be redirected to your app's
-redirect URL. The URL will also contain a `code` parameter. Copy the body of
-this parameter into the script's prompt. Once you've done this, your access
-token will be automatically generated.
+#### Client Credentials
 
-You can then use this access token to authenticate your `VimeoClient`
-instance.
+Retrieving a set of client credentials in this library is very, very easy.  You must provide the `VimeoClient` with the `key` and `secret` for your app, and make a single call.  The example below contains all the necessary steps.  At the end of it, the `VimeoClient` instance (the variable `v`) will be authenticated with the token, and you can store the value - returned by the `load_client_credentials()` call - in your database or a file to use like the example at the start of this README.
 
-Making API Calls
-----------------
+```python
+v = vimeo.VimeoClient(
+    key=YOUR_API_TOKEN,
+    secret=YOUR_TOKEN_SECRET)
 
-All calls to the API are made via the `VimeoClient`. The hierarchy of
-sub-objects is directly related to the enumeration of endpoints in the
-[documentation](https://developer.vimeo.com/api/docs/endpoints). Each of the
-"resource categories" (eg `/users`, `/videos`, etc) are accessible by name
-from the vimeo client:
+try:
+    token = v.load_client_credentials()
+except vimeo.auth.GrantFailed:
+    # Handle the failure to get a token from the provided code and redirect.
+```
 
-    vimeo.users(query="puppies")
+#### Authorization Code
 
-The above call performs a search on `/users` with the query "puppies". The
-other "resource category" roots work similarly - in fact, the majority of
-endpoints in the library accept the `query` and `query_fields` kwargs.
+Getting a bearer token via the authorization code method is a bit more complicated.  The most important thing to understand is that we need to go through a series of basic steps:
 
-To request a specific instance of one of these resource categories, use
-typical python dot syntax for property access.
+0. We send the user to a web page where they can choose to accept or reject the permissions we are asking for.
+0. When the user makes their selection and accepts or rejects your app, the user is redirected to a webpage specified by you.
+0. If the user authorized your app, you can exchange the code provided for the bearer token.
 
-    vimeo.users.emmett9001()
+This can be done with this library using some basic helper functions.  The code below demonstrates, but do note that there are 2 sections, where you redirect the user to Vimeo, and where the user returns so you can perform the final step.
 
-This requests `/users/emmett9001`. Since `emmett9001` is a normal python
-attribute, you can also request it with `getattr()`
+```python
+"""This section is used to determine where to direct the user."""
+v = vimeo.VimeoClient(
+    key=YOUR_API_TOKEN,
+    secret=YOUR_TOKEN_SECRET)
 
-    getattr(vimeo.users, 'emmett9001')()
+vimeo_authorization_url = v.auth_url(['public', 'private'], 'https://example.com')
 
-The library also provides a convenience method for this behavior
+# Your application should now redirect to vimeo_authorization_url.
+```
 
-    vimeo.users.get('emmett9001')()
+```python
+"""This section completes the authentication for the user."""
+v = vimeo.VimeoClient(
+    key=YOUR_API_TOKEN,
+    secret=YOUR_TOKEN_SECRET)
 
-which is equivalent to the two above calls.
+# You should retrieve the "code" from the URL string Vimeo redirected to.  Here that's named CODE_FROM_URL
+try:
+    token, user, scope = v.exchange_code(CODE_FROM_URL, 'https://example.com')
+except vimeo.auth.GrantFailed:
+    # Handle the failure to get a token from the provided code and redirect.
 
-Continuing down the hierarchy of endpoints, we can get a specific attribute of
-our user, for example, `following`.
+# Store the token, scope and any additional user data you require in your database so users do not have to re-authorize your application repeatedly.
+```
 
-    vimeo.users.emmett9001.following()
+This process is generally quite simple, but it does require a little more effort than the client credentials grant to make work properly.  Remember that you may ask for scopes that the user decides *not* to give you, and your application must gracefully handle that.
 
-This call requests `/users/emmett9001/following`. See a pattern?
+### Uploading a new video
 
-Me
---
+Once you have an authenticated instance of the `VimeoClient` class, uploading is a single function call away.  Internally, this library will provide the `streaming` upload and send a local file to the server.
 
-A special case is the `me` call, which is an exact behavioral equivalent
-to `getattr(vimeo.users, "my username")`. This is used with simply
+```python
+v = vimeo.VimeoClient(
+    key=YOUR_API_TOKEN,
+    secret=YOUR_TOKEN_SECRET)
 
-    vimeo.me.following()
+video_uri = v.upload('your-filename.mp4')
+```
 
-The user that this call refers to is the owner of the access token provided at
-client initialization time.
+##### Replacing video source file
 
-Asynchronous Operation
-----------------------
+Once you have an authenticated instance of the `VimeoClient` class, you can also replace the source file of an existing video.
 
-The library supports synchronous calls as well as two different flavors of
-asynchronous operation. These two flavors are *callbacks* and *tornado
-coroutines*. They can be used interchangeably within the same program.
+```python
+video_uri = v.replace(
+    video_uri='video_uri', 
+    filename='your-filename.mp4',
+    upgrade_to_1080=False)
+```
 
-Examples of each use case can be found in the file `server.py`.
+### Uploading a picture
 
-The library can be called as a Tornado coroutine using the `async` kwarg as follows:
+Once you have an authenticated instance of the `VimeoClient` class, uploading a picture requires only the target object (for instance, the video for which you would like to replace the thumbnail).
 
-    result = yield vimeo.users(query='joe', async=True)
+```python
+v = vimeo.VimeoClient(
+    key=YOUR_API_TOKEN,
+    secret=YOUR_TOKEN_SECRET)
 
-The library can be called with a callback function as follows:
+v.upload_picture('/videos/12345', 'your-image.jpg', activate=True)
+```
 
-    def callback(result):
-        self.write(result)
-        self.finish()
-    vimeo.users(query='joe', _callback=callback)
+Note:  This will make it the active picture for all users this way.  The `activate` keyword argument defaults to `False`, so without it you will need to activate the picture yourself.
 
-Both the `_callback` and `async` kwargs are supported by all library functions
-that reference resources.
+### Uploading a text track
 
-Editable Resources
-------------------
+Once you have an authenticated instance of the `VimeoClient` class, uploading a text track requires the video uri of the video the text track will be added to, text track type, text track language, and text track filename.
 
-It turns out that `vimeo.me.following` supports `PUT` and
-`DELETE` as well as `GET`, (as do many other endpoints) which means we can make
-changes to the resource located there.
+```python
+v = vimeo.VimeoClient(
+    key=YOUR_API_TOKEN,
+    secret=YOUR_TOKEN_SECRET)
 
-To add a followee, we can use `put()`.
+v.upload_texttrack('/videos/12345', 'captions', 'en-US', 'your-texttrack.vtt')
+```
 
-    vimeo.me.following.put("joelifrieri")
+# Legacy Python Library
 
-If we don't want to follow Joe anymore, we can use
-
-    vimeo.me.following.delete("joelifrieri")
-
-To see the full list of editable and non-editable resources in this library,
-look at any call to `merge_properties()` in `resources.py`.
-
-Uploads
--------
-
-The library handles streaming uploads with a single simple call:
-
-    vimeo.upload("/my/great/video/file.mp4", post_check_hook=my_hook)
-
-If your access token is allowed the `upload` scope, you can use this method.
-
-Behind the scenes, the library makes a number of requests on your behalf
-(which are detailed in the docstrings in `uploads.py`). These include a call
-made after uploading that checks the amount of the file that has been
-successfully uploaded. You can supply a hook to the upload function. If you do
-so, this hook will be called after each size check. See the docstrings in
-`upload.py` for details.
-
-Picture Uploads
--------
-
-The library handles uploading a picture for a user or video with a single call:
-
-    vimeo.uploadpicture('/videos/76069789', 'test.jpg')
-
-If your access token is allowed the `upload` scope, you can use this method.
-
-Behind the scenes, the library makes a number of requests on your behalf to
-upload the picture and connect and activate it on the object.
-
-Testing
--------
-
-To run the unit tests, you need pytest
-
-    pip install pytest
-
-Once you have that, `cd` into the root directory of this repo and
-
-    py.test --tb=line -vs
-
-License
--------
-
-    Licensed to the Apache Software Foundation (ASF) under one
-    or more contributor license agreements.  See the NOTICE file
-    distributed with this work for additional information
-    regarding copyright ownership.  The ASF licenses this file
-    to you under the Apache License, Version 2.0 (the
-    "License"); you may not use this file except in compliance
-    with the License.  You may obtain a copy of the License at
-
-        http://www.apache.org/licenses/LICENSE-2.0
-
-    Unless required by applicable law or agreed to in writing,
-    software distributed under the License is distributed on an
-    "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-    KIND, either express or implied.  See the License for the
-    specific language governing permissions and limitations
-    under the license.
+An earlier version of this library used a more complicated ORM syntax.  This library is still available from this github repo via the [orm-tornado](https://github.com/vimeo/vimeo.py/releases/tag/orm-tornado) tag.
